@@ -162,13 +162,14 @@ DESIGN DISCUSSION: discuss why you chose 10bit for each level of the multi-level
 
 7. `map_page`: implementation
     - objective: create a virtual to physical address mapping
+    - input: pde_t* pgdir, VA, PA
 
     - extract the PDX, PTX indices from the VA
     - check if the target page table exists using PDX => pgtbl_ptr
         - if false: 
             - allocate a new page table in the buffer (1 frame)
             - zero the frame 
-            - store the pde_t[frame address + flags] at pgdir[PDX]
+            - store the pde_t[frame address + IN_USE flag] at pgdir[PDX]
 
     - check if pgtbl[PTX] exists
         - if true:
@@ -178,15 +179,107 @@ DESIGN DISCUSSION: discuss why you chose 10bit for each level of the multi-level
         - if false:
             - set pgtbl[PTX] = pa | IS_ALLOCD
 
+    ```c
+
+    int map_page(pde_t *pgdir, void *va, void *pa)
+    {
+        // TODO: map virtual address to physical address in the page tables.
+        // make this threadsafe
+        // check if there is an existing mapping for a virtual address
+        vaddr32_t v_addr = VA2U(va);
+        uint32_t pgdir_idx = PDX(v_addr);
+        uint32_t pgtbl_idx = PTX(v_addr);
+      
+        // "upsert" the target page table
+        if(!(pgdir[pgdir_idx] & IN_USE)) {
+          // allocate pgtbl and zero it
+          void* pgtbl_frame = alloc_frame();
+          if(pgtbl_frame == 0) return -1;
+      
+          memset(pgtbl_frame, 0, PGSIZE);
+          pgdir[pgdir_idx] = (uint32_t)(uintptr_t)pgtbl_frame | IN_USE;
+        }
+
+        pte_t* pgtbl = (pte_t*)(pgdir[pgdir_idx] & ~OFFMASK);
+        if(!(pgtbl[pgtbl_idx] & IN_USE)) {
+          pgtbl[pgtbl_idx] = (uint32_t)(uintptr_t)pa | IN_USE;
+          return 0;
+        }
+
+        return -1;
+    }
 
 
+    ```
 
 - some other steps that were done here:
-    - `IS_ALLOCD` is used as a flag to mark 
+    - `IN_USE` flag: marks the pde_t and pte_t entries if already being used, through LSB.
+        - note: pde_t and pte_t entries are frame-addressable so lower 12 bits are always 0 (1GB buffer)
+        - the only way for the LSB to be 1 is because the frame already allocated.
+
     - `pgdir` is now a static global variable 
     - `lock` pthread mutex is initialized
 
-- input: pde_t* pgdir, VA, PA
+
+8. `void* get_next_avail(int num_pages)`:
+    - using first fit policy, find the index of the first substring of 0s that fits num_pages
+
+    ```c
+
+    void *get_next_avail(int num_pages)
+    {
+        if(num_pages <= 0) return NULL;
+
+        uint32_t chunk_start = 0; 
+        uint32_t ctr = 0;
+
+        for(int i = 0; i < (MAX_MEMSIZE / PGSIZE) ; i++) {
+          if(get_bit(v_bmap, i) == 0) {
+            ctr++;
+            if(ctr == num_pages) {
+              // return void* to the corresponding vpage addr
+              uint32_t vpage_byte_offset = chunk_start * PGSIZE;
+              return U2VA(vpage_byte_offset);
+            }
+          } else {
+            chunk_start = i+1; 
+            ctr = 0;
+          }
+        }
+
+        return NULL; // No available block placeholder.
+    }
+
+    ```
+
+    - the chunk_start value represents the idx of the v_page (in 4GB space)
+    - 
+
+9. `n_malloc`:
+
+    ```c
+    void *n_malloc(unsigned int num_bytes)
+    {
+        uint32_t num_pages = (num_bytes + PGSIZE - 1) / PGSIZE;
+        vaddr32_t va_base = VA2U(get_next_avail(num_pages));
+        if(!va_base) return NULL;
+
+        for(uint32_t i = 0; i < num_pages; i++) {
+          void* pa = alloc_frame();
+          if(pa == NULL) return NULL;
+
+          int ret = map_page(pgdir, va_base + (i * PGSIZE), pa);
+          if(ret == -1) return NULL; 
+         
+          set_bit(v_bmap, i);
+        }
+
+        return va_base;
+    }
+
+```
+
+10. 
 
 ############
 ## PART 2 ##

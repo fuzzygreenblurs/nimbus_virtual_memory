@@ -216,8 +216,26 @@ int map_page(pde_t *pgdir, void *va, void *pa)
  */
 void *get_next_avail(int num_pages)
 {
-    return NULL; // No available block placeholder.
+    if(num_pages <= 0) return NULL;
 
+    uint32_t chunk_start = 0; 
+    uint32_t ctr = 0;
+
+    for(int i = 0; i < (MAX_MEMSIZE / PGSIZE) ; i++) {
+      if(get_bit(v_bmap, i) == 0) {
+        ctr++;
+        if(ctr == num_pages) {
+          // return void* to the corresponding vpage addr
+          uint32_t vpage_byte_offset = chunk_start * PGSIZE;
+          return U2VA(vpage_byte_offset);
+        }
+      } else {
+        chunk_start = i+1; 
+        ctr = 0;
+      }
+    }
+
+    return NULL; // No available block placeholder.
 }
 
 /*
@@ -230,10 +248,24 @@ void *get_next_avail(int num_pages)
  *   Pointer to the starting virtual address of allocated memory (success).
  *   NULL if allocation fails.
  */
+
 void *n_malloc(unsigned int num_bytes)
 {
-    // TODO: Determine required pages, allocate them, and map them.
-    return NULL; // Allocation failure placeholder.
+    uint32_t num_pages = (num_bytes + PGSIZE - 1) / PGSIZE;
+    vaddr32_t va_base = VA2U(get_next_avail(num_pages));
+    if(!va_base) return NULL;
+
+    for(uint32_t i = 0; i < num_pages; i++) {
+      void* pa = alloc_frame();
+      if(pa == NULL) return NULL;
+
+      int ret = map_page(pgdir, va_base + (i * PGSIZE), pa);
+      if(ret == -1) return NULL; 
+     
+      set_bit(v_bmap, i);
+    }
+
+    return va_base;
 }
 
 /*
