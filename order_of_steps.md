@@ -373,6 +373,50 @@ DESIGN DISCUSSION: discuss why you chose 10bit for each level of the multi-level
 
     ```
 
+12. `get_data`: generalized both functions in `copy_data`
+    ```c
+
+    static int copy_data(void* va, void* val, int size, int dir) {
+      if(dir != 0 && dir != 1) return -1;
+
+      if(va == NULL || val == NULL || size <= 0)
+        return -1;
+
+      vaddr32_t va_base = VA2U(va);
+      int num_bytes_written = 0;
+
+      while(num_bytes_written < size) {
+        pte_t* pte = translate(pgdir, U2VA(va_base));
+        if(pte == NULL) return -1;
+
+        uint32_t offset = OFF(va_base);
+        uint32_t rem_frame_bytes = PGSIZE - offset;
+        
+        uint32_t chunk_size; 
+        if((size - num_bytes_written) <= rem_frame_bytes) {
+          chunk_size = size - num_bytes_written; 
+        } else {
+          chunk_size = rem_frame_bytes;
+        }
+
+        paddr32_t pa = (*pte & ~OFFMASK) + offset;
+        void* pa_ptr = (void*)(uintptr_t)pa;
+        void* ext_ptr = val + num_bytes_written;
+
+        if(dir == 1) {
+          memcpy(pa_ptr, ext_ptr, chunk_size);
+        } else {
+          memcpy(ext_ptr, pa_ptr, chunk_size);
+        }
+
+        va_base += chunk_size;
+        num_bytes_written += chunk_size;
+      }
+      return 0; 
+    }
+
+    ```
+
 ############
 ## PART 2 ##
 ############
