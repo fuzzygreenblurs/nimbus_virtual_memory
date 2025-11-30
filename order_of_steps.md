@@ -258,8 +258,11 @@ DESIGN DISCUSSION: discuss why you chose 10bit for each level of the multi-level
 9. `n_malloc`:
 
     ```c
+
     void *n_malloc(unsigned int num_bytes)
     {
+        if(pgdir == NULL) set_physical_mem();
+
         uint32_t num_pages = (num_bytes + PGSIZE - 1) / PGSIZE;
         vaddr32_t va_base = VA2U(get_next_avail(num_pages));
         if(!va_base) return NULL;
@@ -268,18 +271,61 @@ DESIGN DISCUSSION: discuss why you chose 10bit for each level of the multi-level
           void* pa = alloc_frame();
           if(pa == NULL) return NULL;
 
-          int ret = map_page(pgdir, va_base + (i * PGSIZE), pa);
+          void* va = U2VA(va_base + (i * PGSIZE));
+          int ret = map_page(pgdir, va, pa);
           if(ret == -1) return NULL; 
-         
-          set_bit(v_bmap, i);
+
+          
+          uint32_t v_page_bit_idx = (va_base / PGSIZE) + i;
+          set_bit(v_bmap, v_page_bit_idx);
         }
 
-        return va_base;
+        return U2VA(va_base);
     }
+    ```
 
-```
+10. `free`:
+  // TODO: Clear page table entries, update bitmaps, and invalidate TLB.
+  // 1. take a virtual address and size
+  // 2. calculate how many pages to free: size to PGSIZE units (rounded up)
+  // 3. for each page:
+  //  - skip if page is not actually allocated (check FLAG)
+  //  - translate va -> pa
+  //  - clear p_bmap and v_bmap bits
+  //  - clear pgtbl_entry
 
-10. 
+    ```c
+
+    void n_free(void *va, int size)
+    {
+      if(va == NULL || size <= 0) return;
+
+      vaddr32_t va_base = VA2U(va);
+      uint32_t num_pages = (size + PGSIZE - 1) / PGSIZE;
+
+      for(uint32_t i = 0; i < num_pages; i++) {
+        vaddr32_t va = va_base + (i * PGSIZE);
+        pte_t* pte = translate(pgdir, U2VA(va));
+        
+        // cannot free unallocated frame
+        if(pte == NULL || ((*pte & IN_USE) == 0)) continue; 
+        
+        // clear corresponding v_page bit
+        uint32_t v_page_bit_idx = va / PGSIZE;
+        clear_bit(v_bmap, v_page_bit_idx);
+
+        // clear corresponding p_frame bit
+        paddr32_t pa = (*pte & ~OFFMASK);
+        uint32_t p_frame_bit_idx = (pa - (paddr32_t)(uintptr_t)p_buff) / PGSIZE;
+        clear_bit(p_bmap, p_frame_bit_idx);
+        
+        // clear corresponding pgtbl entry
+        *pte = 0;
+      }
+    }
+    ```
+
+11. 
 
 ############
 ## PART 2 ##
