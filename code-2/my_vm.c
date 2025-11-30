@@ -360,16 +360,27 @@ void mat_mult(void *mat1, void *mat2, int size, void *answer)
 
     for (i = 0; i < size; i++) {
         for (j = 0; j < size; j++) {
+            void* ans = answer +
+                        (i * size * sizeof(uint32_t)) + 
+                        (j * sizeof(uint32_t));
+
             c = 0;
             for (k = 0; k < size; k++) {
-                // TODO: Compute addresses for mat1[i][k] and mat2[k][j].
-                // Retrieve values using get_data() and perform multiplication.
-                get_data(NULL, &a, sizeof(int));  // placeholder
-                get_data(NULL, &b, sizeof(int));  // placeholder
+                // retrieve values using get_data() and perform multiplication.
+                void* op1 = mat1 + 
+                           (i * size * sizeof(uint32_t)) + 
+                           (k * sizeof(uint32_t));
+
+                void* op2 = mat2 + 
+                           (k * size * sizeof(uint32_t)) +
+                           (j * sizeof(uint32_t));
+          
+                get_data(op1, &a, sizeof(int));  // placeholder
+                get_data(op2, &b, sizeof(int));  // placeholder
                 c += (a * b);
             }
-            // TODO: Store the result in answer[i][j] using put_data().
-            put_data(NULL, (void *)&c, sizeof(int)); // placeholder
+      
+            put_data(ans, (void *)&c, sizeof(int)); // placeholder
         }
     }
 }

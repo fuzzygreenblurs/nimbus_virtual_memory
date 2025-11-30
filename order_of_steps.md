@@ -417,6 +417,39 @@ DESIGN DISCUSSION: discuss why you chose 10bit for each level of the multi-level
 
     ```
 
+
+13. `mat_mult`:
+
+  a square matrix stored in memory (row-major):
+  ┌                        ┐
+  │ [0][0]  [0][1]  [0][2] │    0x1000: mat[0][0]  (4 bytes)
+  │ [1][0]  [1][1]  [1][2] │    0x1004: mat[0][1]  (4 bytes)
+  │ [2][0]  [2][1]  [2][2] │    0x1008: mat[0][2]  (4 bytes)
+  └                        ┘    0x100C: mat[1][0]  (4 bytes)
+                                0x1020: mat[2][2]  (4 bytes)
+
+thus, the addr of [i][j] => mat[i]][j] = (i * size * sizeof(int) + 
+                                         (j * sizeof(int))
+
+to perform square matrix multiplication, consider the following:
+
+  answer[i][j] = sum of (mat1[i][k] * mat2[k][j]) for all k
+
+  Visual example for 3×3 matrices:
+
+         mat1              mat2           answer
+     [0] [1] [2]       [0] [1] [2]     [0] [1] [2]
+  [0] a   b   c    [0]  j   k   l  [0]  ?   ?   ?
+  [1] d   e   f    [1]  m   n   o  [1]  ?   ?   ?
+  [2] g   h   i    [2]  p   q   r  [2]  ?   ?   ?
+
+  [0][1] = ([0][0] * [0][1])          --> (a * k)
+         + ([0][1] * [1][1])          --> (b * n) 
+         + ([0][2] * [2][1])          --> (c * q)
+
+pattern: mat1[i][k] × mat2[k][j] → ans[i][j]
+
+                                                      
 ############
 ## PART 2 ##
 ############
