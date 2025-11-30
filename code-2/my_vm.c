@@ -146,7 +146,7 @@ pte_t* translate(pde_t* pgdir, void* va)
 {
     // extract the 32-bit virtual address and compute indices
     // for the page directory, page table, and offset.
-    // return the corresponding PTE if found.
+    // return the corresponding PTE (i.e. p_frame) if found
  
     vaddr32_t v_addr = VA2U(va);
 
@@ -327,10 +327,45 @@ void n_free(void *va, int size)
  */
 int put_data(void *va, void *val, int size)
 {
-    // TODO: Walk virtual pages, translate to physical addresses,
-    // and copy data into simulated memory.
 
-    return -1; // Failure placeholder.
+    //objective: cpy desired proc data from val buff into physical memory 
+    // - i.e. copy subchunks into consecutive v_pages
+    // - i.e. copy into corresponding (non-contiguous) p_frames
+  
+  
+    // TODO: walk virtual pages, translate to physical addresses,
+    // and copy data into simulated memory.
+    if(va == NULL || val == NULL || size <= 0)
+      return -1;
+
+    vaddr32_t va_base = VA2U(va);
+    int num_bytes_written = 0;
+
+    while(num_bytes_written < size) {
+      pte_t* pte = translate(pgdir, U2VA(va_base));
+      if(pte == NULL) return -1;
+
+      uint32_t offset = OFF(VA2U(va_base));
+      uint32_t rem_frame_bytes = PGSIZE - offset;
+      
+      uint32_t chunk_size; 
+      if((size - num_bytes_written) <= rem_frame_bytes) {
+        chunk_size = size - num_bytes_written; 
+      } else {
+        chunk_size = rem_frame_bytes;
+      }
+
+      paddr32_t pa = (*pte & ~OFFMASK) + offset;
+      memcpy(
+        (void*)(uintptr_t)pa, 
+        val + num_bytes_written, 
+        chunk_size
+      );
+
+      va_base += chunk_size;
+      num_bytes_written += chunk_size;
+    }
+    return 0; 
 }
 
 /*
