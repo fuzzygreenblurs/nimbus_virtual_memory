@@ -19,7 +19,9 @@ static void* p_bmap;
 static void* v_bmap;
 
 static pde_t* pgdir = NULL;
-static pthread_mutex_t lock;
+static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t two_op_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t multi_op_lock = PTHREAD_MUTEX_INITIALIZER;
 
 // -----------------------------------------------------------------------------
 // Setup
@@ -38,18 +40,21 @@ void set_physical_mem(void) {
   // use 32-bit values for sizes, page counts, and offsets.
   
   // https://man7.org/linux/man-pages/man2/mmap.2.html
+  pthread_mutex_lock(&lock);
   p_buff = mmap(NULL,
                MEMSIZE,
                PROT_READ | PROT_WRITE,
                MAP_PRIVATE | MAP_ANONYMOUS, 
                -1,
                0);
+  pthread_mutex_unlock(&lock);
 
   if(p_buff == MAP_FAILED) {
     perror("mmap failed.");
     exit(1);
   }
 
+  pthread_mutex_lock(&lock);
   uint32_t p_bmap_bytes = ((MEMSIZE / PGSIZE) + 7) / 8;
   p_bmap = malloc(p_bmap_bytes);
   memset(p_bmap, 0, p_bmap_bytes);
@@ -57,6 +62,8 @@ void set_physical_mem(void) {
   uint32_t v_bmap_bytes = ((MAX_MEMSIZE / PGSIZE) + 7) / 8;
   v_bmap = malloc(v_bmap_bytes);
   memset(v_bmap, 0, v_bmap_bytes);
+  pthread_mutex_unlock(&lock);
+
   set_bit(v_bmap, 0);
   
   // the top frame(s) are reserved for the page directory (pgdir)
@@ -64,19 +71,20 @@ void set_physical_mem(void) {
   uint32_t max_pd_bytes = max_pd_entries * sizeof(pde_t);
   uint32_t max_pd_pages = (max_pd_bytes + PGSIZE - 1) / PGSIZE;
 
+
+  pthread_mutex_lock(&lock);
   pgdir = (pde_t*)p_buff;
   memset(pgdir, 0, max_pd_bytes);
 
   //mark these frames as occupied in the virtual/physical bitmaps
   uint32_t max_frames_in_bytes = max_pd_pages / 8;
   memset(p_bmap, 0xFF, max_frames_in_bytes);
+  pthread_mutex_unlock(&lock);
 
   uint32_t remainder_frames = max_pd_pages % 8;
   for(int i = 0; i < remainder_frames; i++) {
     set_bit(p_bmap, (max_frames_in_bytes * 8) + i);
   }
-
-  pthread_mutex_init(&lock, NULL);
 }
 
 // -----------------------------------------------------------------------------
@@ -150,16 +158,23 @@ pte_t* translate(pde_t* pgdir, void* va)
     // return the corresponding PTE (i.e. p_frame) if found
  
     vaddr32_t v_addr = VA2U(va);
-
     uint32_t pgdir_idx = PDX(v_addr);
+
+    pthread_mutex_lock(&lock);
     pde_t pgdir_entry = pgdir[pgdir_idx];
-    if(pgdir_entry == 0) return NULL;
+
+    if(pgdir_entry == 0) {
+      pthread_mutex_unlock(&lock);
+      return NULL;
+    } 
 
     uint32_t pgtbl_offset = pgdir_entry & ~OFFMASK;
     pte_t* pgtbl = (pte_t*)((char*)p_buff + pgtbl_offset); 
 
     uint32_t pgtbl_idx = PTX(v_addr);
     pte_t* pgtbl_entry_ptr = &(pgtbl[pgtbl_idx]);
+    pthread_mutex_unlock(&lock);
+
     if(pgtbl_entry_ptr == NULL) return NULL;
 
     return pgtbl_entry_ptr;
@@ -187,9 +202,13 @@ int map_page(pde_t *pgdir, void *va, void *pa)
     // "upsert" the target page table
     if(!(pgdir[pgdir_idx] & IN_USE)) {
       // allocate pgtbl and zero it
+
       void* pgtbl_frame = alloc_frame();
-      if(pgtbl_frame == NULL) return -1;
-  
+      if(pgtbl_frame == NULL) {
+        pthread_mutex_unlock(&multi_op_lock);
+        return -1;
+      }
+      
       memset(pgtbl_frame, 0, PGSIZE);
       uint32_t pgdir_offset = (char*)pgtbl_frame - (char*)p_buff;
       pgdir[pgdir_idx] = pgdir_offset | IN_USE;
@@ -201,6 +220,7 @@ int map_page(pde_t *pgdir, void *va, void *pa)
     if(!(pgtbl[pgtbl_idx] & IN_USE)) {
       uint32_t pa_offset = (char*)pa - (char*)p_buff;
       pgtbl[pgtbl_idx] = pa_offset | IN_USE;
+
       return 0;
     }
 
@@ -227,7 +247,6 @@ void *get_next_avail(int num_pages)
 
     uint32_t chunk_start; 
     uint32_t ctr = 0;
-
     for(int i = 0; i < (MAX_MEMSIZE / PGSIZE) ; i++) {
       if(get_bit(v_bmap, i) == 0) {
         if(ctr == 0) {
@@ -260,27 +279,38 @@ void *get_next_avail(int num_pages)
 void *n_malloc(unsigned int num_bytes)
 {
     if(num_bytes == 0) return NULL;
+    
+    pthread_mutex_lock(&multi_op_lock);
     if(pgdir == NULL) set_physical_mem();
 
     uint32_t num_pages = (num_bytes + PGSIZE - 1) / PGSIZE;
-
     void* va_base_raw = get_next_avail(num_pages);
-    if(va_base_raw == NULL) return NULL;
+
+    if(va_base_raw == NULL) {
+      pthread_mutex_unlock(&multi_op_lock);
+      return NULL;
+    }
     vaddr32_t va_base = VA2U(va_base_raw);
 
     for(uint32_t i = 0; i < num_pages; i++) {
       void* pa = alloc_frame();
-      if(pa == NULL) return NULL;
+      if(pa == NULL) {
+        pthread_mutex_unlock(&multi_op_lock);
+        return NULL;
+      }
 
       void* va = U2VA(va_base + (i * PGSIZE));
       int ret = map_page(pgdir, va, pa);
-      if(ret == -1) return NULL;
-
+      if(ret == -1) {
+        pthread_mutex_unlock(&multi_op_lock);
+        return NULL;
+      }
 
       uint32_t v_page_bit_idx = (va_base / PGSIZE) + i;
       set_bit(v_bmap, v_page_bit_idx);
     }
 
+    pthread_mutex_unlock(&multi_op_lock);
     return U2VA(va_base);
 }
 
@@ -313,7 +343,9 @@ void n_free(void *va, int size)
 
     // clear corresponding p_frame bit
     paddr32_t pa = (*pte & ~OFFMASK);
+    pthread_mutex_lock(&lock);
     uint32_t p_frame_bit_idx = (pa - (paddr32_t)(uintptr_t)p_buff) / PGSIZE;
+    pthread_mutex_unlock(&lock);
     clear_bit(p_bmap, p_frame_bit_idx);
     
     // clear corresponding pgtbl entry
@@ -404,30 +436,46 @@ void mat_mult(void *mat1, void *mat2, int size, void *answer)
 void set_bit(char* bmap, int idx) { 
   uint32_t target_byte = idx / 8;
   uint8_t target_bit = idx % 8;
+    
+  pthread_mutex_lock(&lock);
   bmap[target_byte] |= (1 << (target_bit));
-  
+  pthread_mutex_unlock(&lock);
 }
 
 void clear_bit(char* bmap, int idx) {
   uint32_t target_byte = idx / 8;
   uint8_t target_bit  = idx % 8;
+
+  pthread_mutex_lock(&lock);
   bmap[target_byte] &= ~(1 << (target_bit));
+  pthread_mutex_unlock(&lock);
 }
 
 int get_bit(char* bmap, int idx) {
   uint32_t target_byte = idx / 8;
   uint8_t target_bit  = idx % 8;
-  return bmap[target_byte] & (1 << (target_bit));
+
+  pthread_mutex_lock(&lock);
+  int bit = bmap[target_byte] & (1 << (target_bit));
+  int ret = bit != 0;
+  pthread_mutex_unlock(&lock);
+
+  return ret;
 }
 
 void* alloc_frame() {
   for(uint32_t i = 0; i < MAX_NUM_FRAMES; i++) {
+
+    pthread_mutex_lock(&two_op_lock);
     if(get_bit(p_bmap, i) == 0) {
       set_bit(p_bmap, i);
-      return (void*)(p_buff + (i * PGSIZE));
+      void* res = (void*)(p_buff + (i * PGSIZE));
+      pthread_mutex_unlock(&two_op_lock);
+      return res; 
     }
-  }
+    pthread_mutex_unlock(&two_op_lock);
 
+  }
   return NULL;        // bitmap is full (i.e. out of memory) 
 }
 
@@ -458,17 +506,17 @@ static int copy_data(void* va, void* val, int size, int dir) {
     void* pa_ptr = (char*)p_buff + pa_offset;
     void* ext_ptr = val + num_bytes_written;
 
+    pthread_mutex_lock(&lock);
     if(dir == 1) {
       memcpy(pa_ptr, ext_ptr, chunk_size);
     } else {
       memcpy(ext_ptr, pa_ptr, chunk_size);
     }
+    pthread_mutex_unlock(&lock);
 
     va_base += chunk_size;
     num_bytes_written += chunk_size;
   }
   return 0; 
-
-
 }
 
