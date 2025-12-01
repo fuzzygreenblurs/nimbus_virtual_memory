@@ -53,7 +53,7 @@
 
 // --- Macros to extract address components ---
 #define PDX(va)        ((va) >> (OFFSET_BITS + PTX_BITS))             /** compute directory idx from virtual addr **/
-#define PTX(va)        ((va) >> OFFSET_BITS) & ((1 << PTX_BITS) - 1)  /** compute table idx from virtual addr **/
+#define PTX(va)        (((va) >> OFFSET_BITS) & ((1 << PTX_BITS) - 1))  /** compute table idx from virtual addr **/
 #define OFF(va)        ((va) & ((1 << OFFSET_BITS) - 1))              /** compute page offset from virtual addr **/
 
 // -----------------------------------------------------------------------------
@@ -78,7 +78,6 @@ typedef uint32_t pde_t;       // Page directory entry
 
 static inline vaddr32_t VA2U(void *va)     { return (vaddr32_t)(uintptr_t)va; }
 static inline void*     U2VA(vaddr32_t u)  { return (void*)(uintptr_t)u; }
-
 // -----------------------------------------------------------------------------
 //  TLB Configuration
 // -----------------------------------------------------------------------------
@@ -183,9 +182,12 @@ void get_data(void *va, void *val, int size);
 void mat_mult(void *mat1, void *mat2, int size, void *answer);
 
 // -----------------------------------------------------------------------------
-// Helper Functions 
+// Helper Functions
 // -----------------------------------------------------------------------------
 
+static void* alloc_frame();
+static int copy_data(void* va, void* val, int size, int dir);
+//
 // bitmap getters/setters
 void set_bit(char* bmap, int idx);
 int get_bit(char* bmap, int idx);

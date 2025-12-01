@@ -57,6 +57,7 @@ void set_physical_mem(void) {
   uint32_t v_bmap_bytes = ((MAX_MEMSIZE / PGSIZE) + 7) / 8;
   v_bmap = malloc(v_bmap_bytes);
   memset(v_bmap, 0, v_bmap_bytes);
+  set_bit(v_bmap, 0);
   
   // the top frame(s) are reserved for the page directory (pgdir)
   uint32_t max_pd_entries = 1 << PDX_BITS;
@@ -154,10 +155,12 @@ pte_t* translate(pde_t* pgdir, void* va)
     pde_t pgdir_entry = pgdir[pgdir_idx];
     if(pgdir_entry == 0) return NULL;
 
+    uint32_t pgtbl_offset = pgdir_entry & ~OFFMASK;
+    pte_t* pgtbl = (pte_t*)((char*)p_buff + pgtbl_offset); 
+
     uint32_t pgtbl_idx = PTX(v_addr);
-    pte_t* pgtbl = (pte_t*)(pgdir_entry & ~OFFMASK);
     pte_t* pgtbl_entry_ptr = &(pgtbl[pgtbl_idx]);
-    if(*pgtbl_entry_ptr == 0) return NULL;
+    if(pgtbl_entry_ptr == NULL) return NULL;
 
     return pgtbl_entry_ptr;
 }
@@ -188,12 +191,16 @@ int map_page(pde_t *pgdir, void *va, void *pa)
       if(pgtbl_frame == NULL) return -1;
   
       memset(pgtbl_frame, 0, PGSIZE);
-      pgdir[pgdir_idx] = (uint32_t)(uintptr_t)pgtbl_frame | IN_USE;
+      uint32_t pgdir_offset = (char*)pgtbl_frame - (char*)p_buff;
+      pgdir[pgdir_idx] = pgdir_offset | IN_USE;
     }
 
-    pte_t* pgtbl = (pte_t*)(pgdir[pgdir_idx] & ~OFFMASK);
+    uint32_t pgtbl_offset = pgdir[pgdir_idx] & ~OFFMASK;
+    pte_t* pgtbl = (pte_t*)((char*)p_buff + pgtbl_offset);
+
     if(!(pgtbl[pgtbl_idx] & IN_USE)) {
-      pgtbl[pgtbl_idx] = (uint32_t)(uintptr_t)pa | IN_USE;
+      uint32_t pa_offset = (char*)pa - (char*)p_buff;
+      pgtbl[pgtbl_idx] = pa_offset | IN_USE;
       return 0;
     }
 
@@ -218,21 +225,22 @@ void *get_next_avail(int num_pages)
 {
     if(num_pages <= 0) return NULL;
 
-    uint32_t chunk_start = 0; 
+    uint32_t chunk_start; 
     uint32_t ctr = 0;
 
     for(int i = 0; i < (MAX_MEMSIZE / PGSIZE) ; i++) {
       if(get_bit(v_bmap, i) == 0) {
+        if(ctr == 0) {
+          chunk_start = i;
+        }
+
         ctr++;
         if(ctr == num_pages) {
           // return void* to the corresponding vpage addr
           uint32_t vpage_byte_offset = chunk_start * PGSIZE;
           return U2VA(vpage_byte_offset);
         }
-      } else {
-        chunk_start = i+1; 
-        ctr = 0;
-      }
+      } else ctr = 0; 
     }
 
     return NULL; // No available block placeholder.
@@ -255,8 +263,10 @@ void *n_malloc(unsigned int num_bytes)
     if(pgdir == NULL) set_physical_mem();
 
     uint32_t num_pages = (num_bytes + PGSIZE - 1) / PGSIZE;
-    vaddr32_t va_base = VA2U(get_next_avail(num_pages));
-    if(!va_base) return NULL;
+
+    void* va_base_raw = get_next_avail(num_pages);
+    if(va_base_raw == NULL) return NULL;
+    vaddr32_t va_base = VA2U(va_base_raw);
 
     for(uint32_t i = 0; i < num_pages; i++) {
       void* pa = alloc_frame();
@@ -264,9 +274,9 @@ void *n_malloc(unsigned int num_bytes)
 
       void* va = U2VA(va_base + (i * PGSIZE));
       int ret = map_page(pgdir, va, pa);
-      if(ret == -1) return NULL; 
+      if(ret == -1) return NULL;
 
-      
+
       uint32_t v_page_bit_idx = (va_base / PGSIZE) + i;
       set_bit(v_bmap, v_page_bit_idx);
     }
@@ -444,8 +454,8 @@ static int copy_data(void* va, void* val, int size, int dir) {
       chunk_size = rem_frame_bytes;
     }
 
-    paddr32_t pa = (*pte & ~OFFMASK) + offset;
-    void* pa_ptr = (void*)(uintptr_t)pa;
+    paddr32_t pa_offset = (*pte & ~OFFMASK) + offset;
+    void* pa_ptr = (char*)p_buff + pa_offset;
     void* ext_ptr = val + num_bytes_written;
 
     if(dir == 1) {
