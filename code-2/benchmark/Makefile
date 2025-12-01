@@ -1,8 +1,8 @@
 
 all : test
 test: ../my_vm.h
-	gcc test.c -L../ -lmy_vm -o test
-	gcc multi_test.c -L../ -lmy_vm -o mtest -lpthread 
+	gcc -g test.c -L../ -lmy_vm -o test
+	gcc -g multi_test.c -L../ -lmy_vm -lpthread -o mtest
 
 clean:
 	rm -rf test mtest

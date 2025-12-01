@@ -55,6 +55,8 @@ void set_physical_mem(void) {
   }
 
   pthread_mutex_lock(&lock);
+  memset(&tlb_store, 0, sizeof(tlb_store));
+
   uint32_t p_bmap_bytes = ((MEMSIZE / PGSIZE) + 7) / 8;
   p_bmap = malloc(p_bmap_bytes);
   memset(p_bmap, 0, p_bmap_bytes);
@@ -103,7 +105,33 @@ void set_physical_mem(void) {
  */
 int TLB_add(void *va, void *pa)
 {
-    // TODO: Implement TLB insertion logic.
+    vaddr32_t va_u = VA2U(va);
+    uint32_t vpn = va_u >> OFFSET_BITS;
+    paddr32_t pa_offset = (char*)pa - (char*)p_buff;
+    pte_t pte = pa_offset | IN_USE;
+
+    pthread_mutex_lock(&lock);
+    // upsert the entry
+    for(int i = 0; i < TLB_ENTRIES; i++) {
+      if(tlb_store.in_use[i] && vpn == tlb_store.vpn[i]) {
+        tlb_store.pte[i] = pte;
+        tlb_store.last_used[i] = tlb_lookups;
+        pthread_mutex_unlock(&lock);
+        return 0;
+      } else {
+        tlb_store.vpn[i] = vpn;
+        tlb_store.pte[i] = pte;
+        tlb_store.in_use[i] = true;
+        tlb_store.last_used[i] = tlb_lookups;
+        pthread_mutex_unlock(&lock);
+        return 0;
+      }
+     
+    pthread_mutex_unlock(&lock);
+    return -1;
+    }
+    
+
     return -1; // Currently returns failure placeholder.
 }
 
@@ -111,15 +139,31 @@ int TLB_add(void *va, void *pa)
  * TLB_check()
  * -----------
  * Looks up a virtual address in the TLB.
- *
+ 
  * Return:
  *   Pointer to the corresponding page table entry (PTE) if found.
  *   NULL if the translation is not found (TLB miss).
  */
 pte_t *TLB_check(void *va)
 {
-    // TODO: Implement TLB lookup.
-    return NULL; // Currently returns TLB miss.
+    vaddr32_t va_u = VA2U(va);
+    uint32_t target_vpn = va_u >> OFFSET_BITS;
+
+    pthread_mutex_lock(&lock);
+    tlb_lookups++;
+
+    // linear scan through TLB
+    for(int i = 0; i < TLB_ENTRIES; i++) {
+      if(tlb_store.in_use[i] && target_vpn == tlb_store.vpn[i]) {
+        tlb_store.last_used[i] = tlb_lookups;
+        pthread_mutex_unlock(&lock);
+        return &tlb_store.pte[i];
+      }
+    }
+    
+    tlb_misses++;
+    pthread_mutex_unlock(&lock);
+    return NULL; 
 }
 
 /*
@@ -131,8 +175,13 @@ pte_t *TLB_check(void *va)
  */
 void print_TLB_missrate(void)
 {
-    double miss_rate = 0.0;
-    // TODO: Calculate miss rate as (tlb_misses / tlb_lookups).
+    double miss_rate;
+    if(tlb_lookups > 0) {
+      miss_rate = (double)tlb_misses / tlb_lookups;
+    } else {
+      miss_rate = 0.0;
+    }
+    
     fprintf(stderr, "TLB miss rate %lf \n", miss_rate);
 }
 
@@ -160,11 +209,17 @@ pte_t* translate(pde_t* pgdir, void* va)
     vaddr32_t v_addr = VA2U(va);
     uint32_t pgdir_idx = PDX(v_addr);
 
-    pthread_mutex_lock(&lock);
+    pte_t* cache_hit = TLB_check(va);
+    if(cache_hit != NULL) {
+      return cache_hit;
+    }
+
+    // tlb miss: procedure
+    pthread_mutex_lock(&two_op_lock);
     pde_t pgdir_entry = pgdir[pgdir_idx];
 
     if(pgdir_entry == 0) {
-      pthread_mutex_unlock(&lock);
+      pthread_mutex_unlock(&two_op_lock);
       return NULL;
     } 
 
@@ -173,9 +228,17 @@ pte_t* translate(pde_t* pgdir, void* va)
 
     uint32_t pgtbl_idx = PTX(v_addr);
     pte_t* pgtbl_entry_ptr = &(pgtbl[pgtbl_idx]);
-    pthread_mutex_unlock(&lock);
 
-    if(pgtbl_entry_ptr == NULL) return NULL;
+    if(pgtbl_entry_ptr == NULL) {
+      pthread_mutex_unlock(&two_op_lock);
+      return NULL;
+    }
+
+    paddr32_t pa = (*pgtbl_entry_ptr & ~OFFMASK);
+    void* pa_ptr = (char*)p_buff + pa; 
+    TLB_add(va, pa_ptr);
+
+    pthread_mutex_unlock(&two_op_lock);
 
     return pgtbl_entry_ptr;
 }

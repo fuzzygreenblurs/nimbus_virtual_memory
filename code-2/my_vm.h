@@ -11,7 +11,7 @@
 /* ============================================================================
  *  Virtual Memory Simulation Header
  * ============================================================================
- *  This header defines constants, data types, and function prototypes
+ *  This header defines co
  *  for implementing a simulated 32-bit virtual memory system.
  *
  *  Students will:
@@ -85,20 +85,10 @@ static inline void*     U2VA(vaddr32_t u)  { return (void*)(uintptr_t)u; }
 #define TLB_ENTRIES   512   // Default number of TLB entries
 
 struct tlb {
-    /*
-     * TODO: Define the TLB structure.
-     * Each entry typically includes:
-     *  - Virtual Page Number (VPN)
-     *  - Physical Frame Number (PFN)
-     *  - Valid bit
-     *  - Optional timestamp for replacement policy (e.g., LRU)
-     *
-     * Example:
-     *   uint32_t vpn;
-     *   uint32_t pfn;
-     *   bool valid;
-     *   uint64_t last_used;
-     */
+  uint32_t vpn[TLB_ENTRIES];
+  pte_t pte[TLB_ENTRIES];
+  bool in_use[TLB_ENTRIES];
+  uint32_t last_used[TLB_ENTRIES];
 };
 
 extern struct tlb tlb_store;
