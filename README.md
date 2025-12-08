@@ -8,8 +8,8 @@ This is a project in thread-safe virtual memory management. The goal is to creat
 The code can be found here. All relevant functions are packaged as a library as described in the writeup. They are prototyped in the `my_vm.h` file and their implementations can be found in the corresponding `my_vm.c` file.
 
 #### Compilation
-a. compiling the library: `make clean && make`
-b. compiling the tests: `cd benchmark && make clean && make`
+- compiling the library: `make clean && make`
+- compiling the tests: `cd benchmark && make clean && make`
 
 #### Testing 
 This library is benchmarked against a square matrix-matrix multiplication operation. Within the benchmark directory, A single-threaded test can be executed by running `test.c`. The multi-threaded test can be executed by running `multi-test.c`. Running these tests will demonstrate that the library arrives at the correct product deterministically along with metrics for TLB performance. 
